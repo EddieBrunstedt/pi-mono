@@ -84,12 +84,14 @@ export class ProcessTerminal implements Terminal {
 		}
 		return env;
 	})();
+	private startGeneration = 0;
 
 	get kittyProtocolActive(): boolean {
 		return this._kittyProtocolActive;
 	}
 
 	start(onInput: (data: string) => void, onResize: () => void): void {
+		const generation = ++this.startGeneration;
 		this.inputHandler = onInput;
 		this.resizeHandler = onResize;
 
@@ -119,10 +121,17 @@ export class ProcessTerminal implements Terminal {
 		// since that resets console mode flags.
 		this.enableWindowsVTInput();
 
-		// Query and enable Kitty keyboard protocol
-		// The query handler intercepts input temporarily, then installs the user's handler
+		// Defer stdin handler setup to drain stale buffered input.
+		// When resuming after an external process (e.g., editor spawned via
+		// spawnSync with stdio: "inherit"), keystrokes typed during that session
+		// may sit in the kernel buffer and get read by Node once we resume().
+		// Since stdin is now in flowing mode with no 'data' listener, any data
+		// read before our setImmediate callback fires is silently discarded.
 		// See: https://sw.kovidgoyal.net/kitty/keyboard-protocol/
-		this.queryAndEnableKittyProtocol();
+		setImmediate(() => {
+			if (this.startGeneration !== generation) return;
+			this.queryAndEnableKittyProtocol();
+		});
 	}
 
 	/**
@@ -277,6 +286,9 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	stop(): void {
+		// Invalidate any pending setImmediate from start()
+		++this.startGeneration;
+
 		if (this.clearProgressInterval()) {
 			process.stdout.write(TERMINAL_PROGRESS_CLEAR_SEQUENCE);
 		}
